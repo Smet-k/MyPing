@@ -1,95 +1,97 @@
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <netinet/ip_icmp.h>
-#include <netinet/in.h>
-#include <sys/time.h>
-#include <sys/select.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
+#include "ping.h"
+#include "sock.h"
 
-double calc_time_diff_ms(struct timeval *start, struct timeval *end){
+#include <sys/time.h>
+#include <sys/types.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <string.h>
+#include <arpa/inet.h>
+
+#define WORD_LENGTH_IN_BYTES 16
+
+static double calc_time_diff_ms(struct timeval *start, struct timeval *end);
+static int fill_header(struct icmphdr* icmph, const int seq);
+static uint16_t calculate_checksum(void* buffer, uint16_t length);
+
+void ping(const char* dst) {
+    if(!dst){
+        perror("Received NULL dst");
+        return;
+    }
+    int sock = create_socket();
+    struct icmphdr icmph;
+    struct sockaddr_in destAddr = resolve_host(dst);
+    struct timeval startTime, endTime;
+    int seq = 1;
+
+    while(1){
+        struct sockaddr_in replyAddr;
+        char packet[PACKET_SIZE];
+
+        if(fill_header(&icmph, seq++) < 0){
+            perror("Failed to fill icmp header");
+            continue;
+        }
+
+        gettimeofday(&startTime, NULL);
+        if(send_packet(sock, &icmph, &destAddr) < 0)
+            perror("Failed to send packet");
+
+        if(recv_packet(sock, packet, &replyAddr) < 0)
+            perror("Failed to receive packet");
+            
+        gettimeofday(&endTime, NULL);
+
+        printf("%3d\t%-15s\t%3.fms\n",seq ,inet_ntoa(replyAddr.sin_addr), calc_time_diff_ms(&startTime, &endTime));
+        sleep(2);
+    }
+}
+
+
+
+static int fill_header(struct icmphdr* icmph, const int seq){
+    if(!icmph) {
+        perror("ICMP header pointer is null");
+        return -1;
+    }
+
+    memset(icmph, 0, sizeof(*icmph));
+
+    icmph->type = ICMP_ECHO;
+    icmph->code = 0;
+    icmph->un.echo.id = (uint16_t)getpid();
+    icmph->un.echo.sequence = seq;
+    icmph->checksum = calculate_checksum(icmph, sizeof(icmph));
+    return 0;
+}
+
+
+
+static uint16_t calculate_checksum(void* buffer, uint16_t length){
+    if(!buffer) return 0;
+
+    uint16_t* word_pointer = buffer;
+    uint32_t sum = 0;
+
+    for(sum = 0; length > 1; length -= 2) {
+        sum += *word_pointer++;
+    }
+
+    if (length == 1) {
+        sum += *(uint8_t*)word_pointer;
+    }
+
+    sum = (sum >> WORD_LENGTH_IN_BYTES) + (sum & 0xFFFF);
+    sum += sum >> WORD_LENGTH_IN_BYTES;
+
+    return (uint16_t)~sum;
+}
+
+
+
+static double calc_time_diff_ms(struct timeval *start, struct timeval *end){
     double start_ms = (start->tv_sec * 1000.0) + (start->tv_usec / 1000.0);
     double end_ms = (end->tv_sec * 1000.0) + (end->tv_usec / 1000.0);
     return end_ms - start_ms;
-}
-
-void ping(struct in_addr* dst) {
-    struct icmphdr icmp_hdr;
-    struct sockaddr_in addr;
-    char dst_string[INET_ADDRSTRLEN];
-    int sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_ICMP);
-    int sequence = 0;
-    if (sock < 0) {
-        perror("socket");
-        return;
-    }
-    
-    memset(&addr, 0, sizeof addr);
-    addr.sin_family = AF_INET;
-    addr.sin_addr = *dst;
-
-    memset(&icmp_hdr, 0, sizeof icmp_hdr);
-    icmp_hdr.type = ICMP_ECHO;
-    icmp_hdr.un.echo.id = 1234;
-
-    inet_ntop(AF_INET, &(addr.sin_addr), dst_string, INET_ADDRSTRLEN);
-
-    for (;;) {
-        unsigned char data[2048];
-        double rtt;
-        int rc;
-        struct timeval timeout = {3, 0}, start, end;
-        fd_set read_set;
-        socklen_t slen;
-        struct icmphdr rcv_hdr;
-
-        icmp_hdr.un.echo.sequence = sequence++;
-        memcpy(data, &icmp_hdr, sizeof icmp_hdr);
-        memcpy(data + sizeof icmp_hdr, "ping", 4);
-        rc = sendto(sock, data, sizeof icmp_hdr + 4,
-                    0, (struct sockaddr*)&addr, sizeof addr);
-        gettimeofday(&start, NULL);
-
-        if (rc <= 0) {
-            perror("Sendto");
-            break;
-        }
-
-        memset(&read_set, 0, sizeof read_set);
-        FD_SET(sock, &read_set);
-
-        // Waiting for reply
-        rc = select(sock + 1, &read_set, NULL, NULL, &timeout);
-        if (rc == 0) {
-            puts("Got no reply\n");
-            continue;
-        } else if (rc < 0) {
-            perror("Select");
-            break;
-        }
-
-        slen = 0;
-        rc = recvfrom(sock, data, sizeof data, 0, NULL, &slen);
-        if (rc <= 0) {
-            perror("recvfrom");
-            break;
-        } else if (rc < sizeof rcv_hdr) {
-            printf("Error, got short ICMP packet, %d bytes\n", rc);
-            break;
-        }
-
-
-
-        memcpy(&rcv_hdr, data, sizeof rcv_hdr);
-        if (rcv_hdr.type == ICMP_ECHOREPLY) {
-            gettimeofday(&end, NULL);
-            rtt = calc_time_diff_ms(&start, &end);
-            printf("%d Bytes from %s, id=0x%x: sequence=%d, Response time: %.3fms\n",
-                   rc,dst_string,icmp_hdr.un.echo.id, icmp_hdr.un.echo.sequence, rtt);
-        } else {
-            printf("Got ICMP packet with type 0x%x ?!?\n", rcv_hdr.type);
-        }
-        sleep(2);
-    }
 }

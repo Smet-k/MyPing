@@ -1,5 +1,6 @@
-#pragma once
+#ifndef PING_H
+#define PING_H
 
-#include <arpa/inet.h>
+void ping(const char* dst);
 
-void ping(struct in_addr* dst);
+#endif
