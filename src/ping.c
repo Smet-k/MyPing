@@ -24,6 +24,7 @@ void ping(const struct Options options) {
     struct sockaddr_in destAddr = resolve_host(options.destination);
     struct timeval startTime, endTime;
     int seq = 1;
+    
     printf("Seq\tDestination\tTime\n");
     while(1){
         struct sockaddr_in replyAddr;
