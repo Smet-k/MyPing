@@ -14,17 +14,17 @@ static double calc_time_diff_ms(struct timeval *start, struct timeval *end);
 static int fill_header(struct icmphdr* icmph, const int seq);
 static uint16_t calculate_checksum(void* buffer, uint16_t length);
 
-void ping(const char* dst) {
-    if(!dst){
+void ping(const struct Options options) {
+    if(!options.destination){
         perror("Received NULL dst");
         return;
     }
     int sock = create_socket();
     struct icmphdr icmph;
-    struct sockaddr_in destAddr = resolve_host(dst);
+    struct sockaddr_in destAddr = resolve_host(options.destination);
     struct timeval startTime, endTime;
     int seq = 1;
-
+    printf("Seq\tDestination\tTime\n");
     while(1){
         struct sockaddr_in replyAddr;
         char packet[PACKET_SIZE];
@@ -44,7 +44,7 @@ void ping(const char* dst) {
         gettimeofday(&endTime, NULL);
 
         printf("%3d\t%-15s\t%3.fms\n",seq ,inet_ntoa(replyAddr.sin_addr), calc_time_diff_ms(&startTime, &endTime));
-        sleep(2);
+        sleep(options.delay);
     }
 }
 
